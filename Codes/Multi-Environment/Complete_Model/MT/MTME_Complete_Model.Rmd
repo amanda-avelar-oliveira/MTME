@@ -1,0 +1,96 @@
+---
+title: "Multi-Trait Multi-Environment Analysis - Complete Model"
+output: pdf_document
+chunk_output_type: console
+---
+# Load BLUEs
+
+
+Load BLUEs from grain yield (GY), grain moisture (GM) and number of ears (NE)
+
+```{r eval=FALSE, message=FALSE}
+BLUEs <- read.table("BLUEs.txt", sep = "\t", h = TRUE, stringsAsFactors = F)
+```
+
+
+Scale traits 
+
+```{r eval=FALSE, message=FALSE}
+library(dplyr)
+MT_scale <- scale(select(BLUEs, c("GY_BLUE", "GM_BLUE", "NE_BLUE")))
+MT_scale <- cbind(select(BLUEs, c("H", "Env")), MT_scale)
+```
+
+Create a column env_trait
+
+```{r eval=FALSE, message=FALSE}
+GY_scale <- select(MT_scale, c("H", "Env", "GY_BLUE"))
+GY_scale$trait_env <- paste(GY_scale$Env , sep = "_", "GY")
+colnames(GY_scale) <- c("H", "env", "BLUES", "trait_env")
+
+
+NE_scale <- select(MT_scale, c("H", "Env", "NE_BLUE"))
+NE_scale$trait_env <- paste(NE_scale$Env , sep = "_", "NE")
+colnames(NE_scale) <- c("H", "env", "BLUES", "trait_env")
+
+GM_scale <- select(MT_scale, c("H", "Env", "GM_BLUE"))
+GM_scale$trait_env <- paste(GM_scale$Env , sep = "_", "GM")
+colnames(GM_scale) <- c("H", "env", "BLUES", "trait_env")
+
+MT_final <- rbind(GY_scale, NE_scale, GM_scale)
+MT_final <- transform(MT_final, trait_env = factor(trait_env))
+str(MT_final)
+```
+
+# Load H matrix
+
+```{r eval=FALSE, message=FALSE}
+load("Hinv.RData")
+dim(AHAT.inv)
+```
+
+
+# Adjust the predictive model using MCMCglmm
+
+
+Set the number of iterations, thin and burnin
+
+```{r eval=FALSE, message=FALSE}
+library(MCMCglmm)
+nitt=30000
+thin=5
+burnin= 6000
+Hinv = as(AHAT.inv,"dgCMatrix") # transform to sparse matrix
+```
+
+Declare the priori
+
+```{r eval=FALSE, message=FALSE}
+n.env = 12
+prior.NonIformative.me <- list(R = list(V = diag(n.env)/n.env, n =0.002), 
+                               G = list( G1 = list(V = diag(n.env)/n.env, n = 0.002)))
+```
+
+
+Adjust the predictive model 
+
+```{r, eval=FALSE, message=FALSE}
+complete.model.MT.ME =MCMCglmm(BLUES ~ -1 + trait_env,
+                               random= ~us(trait_env):H,
+                               ginverse=list(H=Hinv),
+                               rcov = ~ us(trait_env):units,
+                               data = MT_final, 
+                               prior=prior.NonIformative.me,
+                               pr=TRUE,
+                               nitt=nitt, thin=thin, burnin=burnin)
+
+
+summary(complete.model.MT.ME) 
+dim(complete.model.MT.ME$VCV) 
+
+save.image("complete.model.MT.ME.RData")
+
+```
+
+
+

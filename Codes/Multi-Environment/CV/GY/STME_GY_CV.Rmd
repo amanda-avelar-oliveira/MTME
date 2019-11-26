@@ -1,0 +1,94 @@
+---
+title: "Single-Trait Multi-Environment Analysis - GY CV"
+output: pdf_document
+chunk_output_type: console
+---
+# Load BLUEs
+
+
+Load BLUEs from grain yield (GY), grain moisture (GM) and number of ears (NE)
+
+```{r eval=FALSE, message=FALSE}
+BLUEs <- read.table("BLUEs.txt", sep = "\t", h = TRUE, stringsAsFactors = F)
+```
+
+Select the BLUEs from trait GY 
+
+```{r eval=FALSE, message=FALSE}
+library(dplyr)
+BLUEs_GY <- select(BLUEs, c("H", "Env", "GY_BLUE"))
+```
+
+Create a column env_hybrid
+
+```{r eval=FALSE, message=FALSE}
+BLUEs_GY$env_hybrid <- paste("Env",BLUEs_GY$Env , sep = "", BLUEs_GY$H)
+```
+
+# Load H matrix
+
+```{r eval=FALSE, message=FALSE}
+load("Hinv.RData")
+dim(AHAT.inv)
+```
+
+
+# Adjust the predictive model using MCMCglmm
+
+
+Set the number of iterations, thin and burnin
+
+```{r eval=FALSE, message=FALSE}
+library(MCMCglmm)
+nitt=30000
+thin=5
+burnin=6000
+Hinv = as(AHAT.inv,"dgCMatrix") # transform to sparse matrix
+```
+
+Declare the priori
+
+```{r eval=FALSE, message=FALSE}
+n.env = 4
+prior.NonIformative.me <- list(R = list(V = diag(n.env)/n.env, n =0.002), 
+                               G = list( G1 = list(V = diag(n.env)/n.env, n = 0.002)))
+```
+
+
+Adjust the predictive model using a 5 folds cross-validation scheme
+
+```{r, eval=FALSE, message=FALSE}
+set.seed(156423) 
+acc_mcmcglmm <- vector(length=5)
+n_folds <- 1:5
+sets<-sample(c(rep(n_folds, each=85))) # CV 5 folds
+
+for(fold in n_folds){
+  tst<- which(sets ==  fold) # separating the sets from test population
+  
+  ytest <- BLUEs_GY[tst, c(1,3) ,drop= FALSE]
+ 
+  print(paste('Model STME.GY', fold))
+
+  STME.GY = MCMCglmm(GY_BLUE ~ -1 + Env,
+            random= ~us(Env):H,
+            ginverse=list(H=Hinv),
+            rcov = ~ us(Env):units,
+            data = BLUEs_GY[-tst,], 
+            prior=prior.NonIformative.me,
+            pr=TRUE,
+            nitt=nitt, thin=thin, burnin=burnin)
+
+
+blups = colMeans(STME.GY$Sol)
+predicted_GY = data.frame(env_hybrid=gsub(".H.H","H",names(blups)),blups)
+predicted_and_observed_GY = merge(BLUEs_GY,predicted_GY,by="env_hybrid")
+final_GY = predicted_and_observed_GY[tst,]
+acc_mcmcglmm[fold] <- cor(final_GY[,4],final_GY[,5])
+}  
+
+save.image("STME_GY_CV.RData")  
+```
+
+
+

@@ -1,0 +1,94 @@
+---
+title: "Single-Trait Multi-Environment Analysis - NE 2007 CV2"
+output: pdf_document
+chunk_output_type: console
+---
+# Load BLUEs
+
+
+Load BLUEs from grain yield (GY), grain moisture (GM) and number of ears (NE)
+
+```{r eval=FALSE, message=FALSE}
+BLUEs <- read.table("BLUEs.txt", sep = "\t", h = TRUE, stringsAsFactors = F)
+```
+
+Select the BLUEs from trait NE 
+
+```{r eval=FALSE, message=FALSE}
+library(dplyr)
+BLUEs_NE <- select(BLUEs, c("H", "Env", "NE_BLUE"))
+```
+
+Create a column env_hybrid
+
+```{r eval=FALSE, message=FALSE}
+BLUEs_NE$env_hybrid <- paste("Env",BLUEs_NE$Env , sep = "", BLUEs_NE$H)
+```
+
+# Load Hinv matrix
+
+```{r eval=FALSE, message=FALSE}
+load("Hinv.RData")
+dim(AHAT.inv)
+```
+
+
+# Adjust the predictive model using MCMCglmm
+
+
+Set the number of iterations, thin and burnin
+
+```{r eval=FALSE, message=FALSE}
+library(MCMCglmm)
+nitt=30000
+thin=5
+burnin=6000
+Hinv = as(AHAT.inv,"dgCMatrix") # transform to sparse matrix
+```
+
+Declare the prior
+
+```{r eval=FALSE, message=FALSE}
+n.env = 4
+prior.NonIformative.me <- list(R = list(V = diag(n.env)/n.env, n =0.002), 
+                               G = list( G1 = list(V = diag(n.env)/n.env, n = 0.002)))
+```
+
+
+Adjust the predictive model using a 5 folds cross-validation scheme
+
+```{r, eval=FALSE, message=FALSE}
+set.seed(156423) 
+
+# separating the sets from test population
+tst <- which(BLUEs_NE$Env == "2007_CAMPO_MOURAO")
+yteste <- BLUEs_NE[tst,]
+yteste2 <- yteste
+yteste2$NE_BLUE <- NA
+# separating the sets from training population
+ytrn <- BLUEs_NE[-tst,]
+y_final <- rbind(yteste2,ytrn)
+
+
+STME.NE.CV2.2007 = MCMCglmm(NE_BLUE ~ -1 + Env,
+                   random= ~us(Env):H,
+                   ginverse=list(H=Hinv),
+                   rcov = ~ us(Env):units,
+                   data = y_final, 
+                   prior=prior.NonIformative.me,
+                   pr=TRUE,
+                   nitt=nitt, thin=thin, burnin=burnin)
+  
+   
+blups = colMeans(STME.NE.CV2.2007$Sol)
+predicted_ne = data.frame(env_hybrid=gsub(".H.H","H",names(blups)),blups)
+predicted_and_observed_ne = merge(BLUEs_NE,predicted_ne,by="env_hybrid")
+final_ne = predicted_and_observed_ne[tst,]
+acc_mcmcglmm <- cor(final_ne[,4],final_ne[,5])
+
+
+save.image("STME_NE_CV2_2007.RData")  
+```
+
+
+

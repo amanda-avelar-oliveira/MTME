@@ -1,0 +1,146 @@
+---
+title: "Multi-Trait Multi-Environment Analysis - 2009 CV2"
+output: pdf_document
+chunk_output_type: console
+---
+# Load BLUEs
+
+
+Load BLUEs from grain yield (GY), grain moisture (GM) and number of ears (NE)
+
+```{r eval=FALSE, message=FALSE}
+BLUEs <- read.table("BLUEs.txt", sep = "\t", h = TRUE, stringsAsFactors = F)
+```
+
+Scale traits 
+
+```{r eval=FALSE, message=FALSE}
+library(dplyr)
+MT_scale <- scale(select(BLUEs, c("GY_BLUE", "GM_BLUE", "NE_BLUE")))
+MT_scale <- cbind(select(BLUEs, c("H", "Env")), MT_scale)
+```
+
+Create a column env_trait
+
+```{r eval=FALSE, message=FALSE}
+GY_scale <- select(MT_scale, c("H", "Env", "GY_BLUE"))
+GY_scale$trait_env <- paste(GY_scale$Env , sep = "_", "GY")
+colnames(GY_scale) <- c("H", "env", "BLUES", "trait_env")
+
+
+NE_scale <- select(MT_scale, c("H", "Env", "NE_BLUE"))
+NE_scale$trait_env <- paste(NE_scale$Env , sep = "_", "NE")
+colnames(NE_scale) <- c("H", "env", "BLUES", "trait_env")
+
+GM_scale <- select(MT_scale, c("H", "Env", "GM_BLUE"))
+GM_scale$trait_env <- paste(GM_scale$Env , sep = "_", "GM")
+colnames(GM_scale) <- c("H", "env", "BLUES", "trait_env")
+
+MT_final <- rbind(GY_scale, NE_scale, GM_scale)
+MT_final <- transform(MT_final, trait_env = factor(trait_env))
+str(MT_final)
+```
+
+Create a column env_trait_hybrid
+
+```{r eval=FALSE, message=FALSE}
+MT_final$env_trait_hybrid <- paste(MT_final$trait_env, sep = "", MT_final$H)
+```
+
+
+# Load H matrix
+
+```{r eval=FALSE, message=FALSE}
+load("Hinv.RData")
+dim(AHAT.inv)
+```
+
+
+# Adjust the predictive model using MCMCglmm
+
+
+Set the number of iterations, thin and burnin
+
+```{r eval=FALSE, message=FALSE}
+library(MCMCglmm)
+nitt=30000
+thin=5
+burnin=6000
+Hinv = as(AHAT.inv,"dgCMatrix") # transform to sparse matrix
+```
+
+Declare the prior
+
+```{r eval=FALSE, message=FALSE}
+n.env = 12
+prior.NonIformative.me <- list(R = list(V = diag(n.env)/n.env, n =0.002), 
+                               G = list( G1 = list(V = diag(n.env)/n.env, n = 0.002)))
+```
+
+
+Adjust the predictive model using a 5 folds cross-validation scheme
+
+```{r, eval=FALSE, message=FALSE}
+set.seed(156423) 
+acc_mcmcglmm_GY <- vector(length=5)
+acc_mcmcglmm_NE <- vector(length=5)
+acc_mcmcglmm_GM <- vector(length=5)
+
+# separating the sets from test population
+tst <- which(MT_final$Env == "2009_CAMPO_MOURAO")
+ytest <- MT_final[tst,]
+ytest2 <- ytest
+ytest2$BLUES <- NA
+# separating the sets from training population
+ytrn <- MT_final[-tst,]
+y_final <- rbind(ytest2,ytrn)
+
+
+  model.MT.ME.CV2.2009 =MCMCglmm(BLUES ~ -1 + trait_env,
+                               random= ~us(trait_env):H,
+                               ginverse=list(H=Hinv),
+                               rcov = ~ us(trait_env):units,
+                               data = y_final, 
+                               prior=prior.NonIformative.me,
+                               pr=TRUE,
+                               nitt=nitt, thin=thin, burnin=burnin)
+
+
+  a_gy = colMeans(model.MT.ME.CV2.2009$Sol)
+  idx_gy = grep("CAMPO_MOURAO_GY.H.",names(a_gy))
+  predicted_gy = data.frame(H=gsub("trait_env","",names(a_gy[idx_gy])),a_gy[idx_gy])
+  predicted_gy$env_trait_hybrid = gsub(".H.H", "H", predicted_gy$H)
+  predicted_and_observed_gy = 
+  merge(MT_final[,c(3,5)],predicted_gy,by="env_trait_hybrid")
+  tst_gy = grep("2009_CAMPO_MOURAO",predicted_and_observed_gy$env_trait_hybrid)
+  final_gy = predicted_and_observed_gy[tst_gy,]
+  acc_mcmcglmm_GY <- cor(final_gy[,2],final_gy[,4])
+
+  a_ne = colMeans(model.MT.ME.CV2.2009$Sol)
+  idx_ne = grep("CAMPO_MOURAO_NE.H.",names(a_ne))
+  predicted_ne = data.frame(H=gsub("trait_env","",names(a_ne[idx_ne])),a_ne[idx_ne])
+  predicted_ne$env_trait_hybrid = gsub(".H.H", "H", predicted_ne$H)
+  predicted_and_observed_ne = 
+  merge(MT_final[,c(3,5)],predicted_ne,by="env_trait_hybrid")
+  tst_ne = grep("2009_CAMPO_MOURAO",predicted_and_observed_ne$env_trait_hybrid)
+  final_ne= predicted_and_observed_ne[tst_ne,]
+  acc_mcmcglmm_NE <- cor(final_ne[,2],final_ne[,4])
+
+  a_gm = colMeans(model.MT.ME.CV2.2009$Sol)
+  idx_gm = grep("CAMPO_MOURAO_GM.H.",names(a_gm))
+  predicted_gm = data.frame(H=gsub("trait_env","",names(a_gm[idx_gm])),a_gm[idx_gm])
+  predicted_gm$env_trait_hybrid = gsub(".H.H", "H", predicted_gm$H)
+  predicted_and_observed_gm = 
+  merge(MT_final[,c(3,5)],predicted_gm,by="env_trait_hybrid")
+  tst_gm = grep("2009_CAMPO_MOURAO",predicted_and_observed_gm$env_trait_hybrid)
+  final_gm= predicted_and_observed_gm[tst_gm,]
+  acc_mcmcglmm_GM <- cor(final_gm[,2],final_gm[,4])
+
+
+}
+
+save.image("MTME_CV2_2009.RData")  
+```
+
+
+

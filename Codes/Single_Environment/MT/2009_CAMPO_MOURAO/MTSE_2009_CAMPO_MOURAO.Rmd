@@ -1,0 +1,133 @@
+---
+title: "Multi-Trait Single-Environment Analysis"
+output: pdf_document
+chunk_output_type: console
+---
+# Load BLUEs
+
+
+Load BLUEs from grain yield (GY), grain moisture (GM) and number of ears (NE)
+
+```{r eval=FALSE, message=FALSE}
+BLUEs <- read.table("BLUEs.txt", sep = "\t", h = TRUE, stringsAsFactors = F)
+```
+
+Select the BLUEs from environment 2009_CAMPO_MOURAO
+
+```{r eval=FALSE, message=FALSE}
+library("dplyr")
+
+BLUEs_selected <- filter(BLUEs, Env == "2009_CAMPO_MOURAO")
+```
+
+Scale traits 
+
+```{r eval=FALSE, message=FALSE}
+MT_scale <- scale(select(BLUEs_selected, c("GY_BLUE", "GM_BLUE", "NE_BLUE")))
+MT_scale <- cbind(select(BLUEs_selected, c("H", "Env")), MT_scale)
+```
+
+# Load H matrix
+
+```{r eval=FALSE, message=FALSE}
+load("Hinv.RData")
+```
+
+Select in the H matrix only the hybrids from environment 2009_CAMPO_MOURAO
+
+```{r eval=FALSE, message=FALSE}
+idx = as.character(unique(MT_scale$H))
+Hmatrix = AHAT.inv[idx,idx]
+dim(Hmatrix) # 125 x 125
+```
+
+
+# Adjust the predictive model using MCMCglmm
+
+Set the number of iterations, thin and burnin
+
+```{r eval=FALSE, message=FALSE}
+library(MCMCglmm)
+nitt=30000
+thin=5
+burnin=6000
+Hinv = as(Hmatrix,"dgCMatrix") # transform to sparse matrix
+```
+
+Declare the prior
+
+```{r eval=FALSE, message=FALSE}
+n.trait = 3
+prior.NonIformative.mt <- list(R = list(V = diag(n.trait)/n.trait, n =0.002), 
+                               G = list( G1 = list(V = diag(n.trait)/n.trait, 
+                                   n = 0.002)))
+
+```
+
+
+Adjust the predictive model using a 5 folds cross-validation scheme 
+
+```{r eval=FALSE, message=FALSE}
+set.seed(156423) 
+blups <- list()
+ind_test <- list()
+
+acc_mcmcglmm_GY <- vector(length=5)
+acc_mcmcglmm_NE <- vector(length=5)
+acc_mcmcglmm_GM <- vector(length=5)
+
+
+n_folds <- 1:5
+sets<-sample(c(rep(n_folds, each=25))) # CV 5 folds
+
+for(fold in n_folds){
+  
+  tst<- which(sets ==  fold) # separating the sets from test population
+  ytest <- MT_scale[tst, ,drop= FALSE]
+  MT_trn <- MT_scale[-tst,]
+  
+
+  print(paste('Model MTSE.2009_CM', fold))
+
+  MTSE.2009_CM = MCMCglmm(cbind(GY_BLUE, GM_BLUE, NE_BLUE) ~ trait -1 ,
+                 random= ~ us(trait):H,
+                 ginverse=list(H=Hinv),
+                 rcov = ~ us(trait):units,
+                 data = MT_trn, 
+                 prior=prior.NonIformative.mt,
+                 family = rep("gaussian", 3),
+                 pr=TRUE,
+                 nitt=nitt, thin=thin, burnin=burnin)
+
+blups[[fold]] = colMeans(MTSE.2009_CM$Sol)
+ind_test[[fold]] = ytest$H
+
+# Extracting the accuracy from GY
+a_gy = colMeans(MTSE.2009_CM$Sol)
+idx_gy = grep("traitGY_BLUE.H.",names(a_gy)) 
+predicted_gy = data.frame(H=gsub("traitGY_BLUE.H.","",names(a_gy[idx_gy])),a_gy[idx_gy])
+predicted_and_observed_gy = merge(MT_scale[,c(1,3)],predicted_gy,by="H")
+final_gy = predicted_and_observed_gy[tst,]
+acc_mcmcglmm_GY[fold] <- cor(final_gy[,2],final_gy[,3])
+
+# Extracting the accuracy from NE
+a_ne = colMeans(MTSE.2009_CM$Sol)
+idx_ne = grep("traitNE_BLUE.H.",names(a_ne)) 
+predicted_ne = data.frame(H=gsub("traitNE_BLUE.H.","",names(a_ne[idx_ne])),a_ne[idx_ne])
+predicted_and_observed_ne = merge(MT_scale[,c(1,5)],predicted_ne,by="H")
+final_ne = predicted_and_observed_ne[tst,]
+acc_mcmcglmm_NE[fold] <- cor(final_ne[,2],final_ne[,3])
+
+# Extracting the accuracy from GM
+a_gm = colMeans(MTSE.2009_CM$Sol)
+idx_gm = grep("traitGM_BLUE.H.",names(a_gm)) 
+predicted_gm = data.frame(H=gsub("traitGM_BLUE.H.","",names(a_gm[idx_gm])),a_gm[idx_gm])
+predicted_and_observed_gm = merge(MT_scale[,c(1,4)],predicted_gm,by="H")
+final_gm = predicted_and_observed_gm[tst,]
+acc_mcmcglmm_GM[fold] <- cor(final_gm[,2],final_gm[,3])
+
+}
+
+save.image("2009_CAMPO_MOURAO_MT_CV.RData")
+```
+
